@@ -1,0 +1,85 @@
+---
+- name: Install YARA and configure Wazuh
+  hosts: servers
+  become: yes
+  tasks:
+    - name: Update apt package index
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name: ['make', 'gcc', 'autoconf', 'libtool', 'libssl-dev', 'pkg-config', 'curl', 'tar']
+        state: present
+
+    - name: Download YARA source code
+      get_url:
+        url: https://github.com/VirusTotal/yara/archive/v4.2.3.tar.gz
+        dest: /tmp/v4.2.3.tar.gz
+
+    - name: Extract YARA source code
+      unarchive:
+        src: /tmp/v4.2.3.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+
+    - name: Remove downloaded tarball
+      file:
+        path: /tmp/v4.2.3.tar.gz
+        state: absent
+
+    - name: Compile and install YARA
+      shell: |
+        cd /usr/local/bin/yara-4.2.3/
+        ./bootstrap.sh
+        ./configure
+        make
+        make install
+        make check
+      args:
+        executable: /bin/bash
+
+    - name: Create directory for YARA rules
+      file:
+        path: /tmp/yara/rules
+        state: directory
+        mode: '0755'
+
+    - name: Download YARA rules
+      command: >
+        curl 'https://valhalla.nextron-systems.com/api/v1/get'
+        -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        -H 'Accept-Language: en-US,en;q=0.5'
+        --compressed
+        -H 'Referer: https://valhalla.nextron-systems.com/'
+        -H 'Content-Type: application/x-www-form-urlencoded'
+        -H 'DNT: 1'
+        -H 'Connection: keep-alive'
+        -H 'Upgrade-Insecure-Requests: 1'
+        --data 'demo=demo&apikey=1111111111111111111111111111111111111111111111111111111111111111&format=text'
+        -o /tmp/yara/rules/yara_rules.yar
+
+    - name: Transfer yara.sh file
+      copy:
+        src: yara.sh
+        dest: /var/ossec/active-response/bin/yara.sh
+        mode: '0750'
+        owner: root
+        group: wazuh
+
+    - name: Add directory to monitor in Wazuh configuration
+      blockinfile:
+        path: /var/ossec/etc/ossec.conf
+        block: '<directories realtime="yes">/root/</directories>'
+        insertafter: '<syscheck>'
+        marker: <!-- {mark} ANSIBLE MANAGED BLOCK -->
+
+    - name: Install jq
+      apt:
+        name: jq
+        state: present
+
+    - name: Restart wazuh-agent service
+      systemd:
+        name: wazuh-agent
+        state: restarted
