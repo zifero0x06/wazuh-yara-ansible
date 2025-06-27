@@ -1,85 +1,86 @@
 ---
 - name: Install YARA and configure Wazuh
-  hosts: servers
+  hosts: all
   become: yes
+  vars:
+    yara_version: "4.2.3"
+    yara_src_dir: "/usr/local/src/yara-{{ yara_version }}"
+    yara_rules_dir: "/tmp/yara/rules"
+    yara_rules_repo: "https://github.com/Neo23x0/signature-base/archive/refs/heads/master.zip"
+    yara_rules_zip: "/tmp/signature-base.zip"
   tasks:
-    - name: Update apt package index
+    - name: Update apt cache
       apt:
         update_cache: yes
-
     - name: Install required packages
       apt:
-        name: ['make', 'gcc', 'autoconf', 'libtool', 'libssl-dev', 'pkg-config', 'curl', 'tar']
+        name:
+          - make
+          - gcc
+          - autoconf
+          - libtool
+          - libssl-dev
+          - pkg-config
+          - curl
+          - tar
+          - unzip
         state: present
-
-    - name: Download YARA source code
+    - name: Download YARA source
       get_url:
-        url: https://github.com/VirusTotal/yara/archive/v4.2.3.tar.gz
-        dest: /tmp/v4.2.3.tar.gz
-
-    - name: Extract YARA source code
+        url: "https://github.com/VirusTotal/yara/archive/v{{ yara_version }}.tar.gz"
+        dest: "/tmp/yara-{{ yara_version }}.tar.gz"
+    - name: Extract YARA source
       unarchive:
-        src: /tmp/v4.2.3.tar.gz
-        dest: /usr/local/bin/
+        src: "/tmp/yara-{{ yara_version }}.tar.gz"
+        dest: "/usr/local/src/"
         remote_src: yes
-
-    - name: Remove downloaded tarball
-      file:
-        path: /tmp/v4.2.3.tar.gz
-        state: absent
-
     - name: Compile and install YARA
       shell: |
-        cd /usr/local/bin/yara-4.2.3/
         ./bootstrap.sh
         ./configure
         make
         make install
         make check
       args:
+        chdir: "{{ yara_src_dir }}"
         executable: /bin/bash
-
-    - name: Create directory for YARA rules
+    - name: Create rules directory
       file:
-        path: /tmp/yara/rules
+        path: "{{ yara_rules_dir }}"
         state: directory
         mode: '0755'
-
-    - name: Download YARA rules
-      command: >
-        curl 'https://valhalla.nextron-systems.com/api/v1/get'
-        -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        -H 'Accept-Language: en-US,en;q=0.5'
-        --compressed
-        -H 'Referer: https://valhalla.nextron-systems.com/'
-        -H 'Content-Type: application/x-www-form-urlencoded'
-        -H 'DNT: 1'
-        -H 'Connection: keep-alive'
-        -H 'Upgrade-Insecure-Requests: 1'
-        --data 'demo=demo&apikey=1111111111111111111111111111111111111111111111111111111111111111&format=text'
-        -o /tmp/yara/rules/yara_rules.yar
-
-    - name: Transfer yara.sh file
+    - name: Download YARA rules ZIP from GitHub
+      get_url:
+        url: "{{ yara_rules_repo }}"
+        dest: "{{ yara_rules_zip }}"
+    - name: Extract YARA rules archive
+      unarchive:
+        src: "{{ yara_rules_zip }}"
+        dest: /tmp
+        remote_src: yes
+    - name: Copy .yar files to rules directory
+      copy:
+        src: /tmp/signature-base-master/yara
+        dest: "{{ yara_rules_dir }}"
+        remote_src: yes
+    - name: Transfer yara.sh script
       copy:
         src: yara.sh
         dest: /var/ossec/active-response/bin/yara.sh
         mode: '0750'
         owner: root
         group: wazuh
-
-    - name: Add directory to monitor in Wazuh configuration
+    - name: Ensure directory monitored by Wazuh is configured
       blockinfile:
         path: /var/ossec/etc/ossec.conf
-        block: '<directories realtime="yes">/root/</directories>'
-        insertafter: '<syscheck>'
-        marker: <!-- {mark} ANSIBLE MANAGED BLOCK -->
-
-    - name: Install jq
+        block: "<directories realtime=\"yes\">/root/</directories>"
+        insertafter: "<syscheck>"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+    - name: Install jq (JSON processor)
       apt:
         name: jq
         state: present
-
-    - name: Restart wazuh-agent service
+    - name: Restart wazuh-agent
       systemd:
         name: wazuh-agent
         state: restarted
